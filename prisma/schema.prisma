@@ -1,8 +1,9 @@
 generator client {
-  provider     = "prisma-client"
-  output       = "src/generated/prisma"
-  moduleFormat = "esm"
-  runtime      = "bun"
+  provider        = "prisma-client"
+  output          = "src/generated/prisma"
+  moduleFormat    = "esm"
+  runtime         = "bun"
+  previewFeatures = ["fullTextSearchPostgres"]
 }
 
 datasource db {
@@ -70,4 +71,281 @@ model Verification {
 
   @@index([identifier])
   @@map("verification")
+}
+
+// =======================================
+// ENUMS
+// =======================================
+enum MovementType {
+  PURCHASE // Stock received from supplier
+  SALE // Stock sold to customer
+  TRANSFER_OUT // Stock sent to another location
+  TRANSFER_IN // Stock received from another location
+  ADJUSTMENT // Manual correction (audit required)
+  RETURN // Stock returned to supplier or from customer
+  DAMAGED // Stock marked as damaged/unusable
+  LOST // Stock reported lost/stolen
+}
+
+enum ProductStatus {
+  ACTIVE
+  DISCONTINUED
+  OUT_OF_STOCK
+}
+
+enum LocationType {
+  WAREHOUSE
+  STORE
+  DISTRIBUTION_CENTER
+  SUPPLIER
+}
+
+// =========================================
+// CATEGORIES
+// =========================================
+model Category {
+  id          String  @id @default(uuid())
+  name        String  @unique
+  description String?
+  slug        String  @unique
+
+  // Self-referencing hierarchy
+  parentId String?
+  parent   Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children Category[] @relation("CategoryHierarchy")
+
+  // Relations
+  products Product[]
+
+  // Audit fields
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([parentId])
+  @@index([slug])
+  @@map("categories")
+}
+
+// ==========================================
+// SUPPLIERS
+// ==========================================
+model Supplier {
+  id   String @id @default(cuid())
+  name String
+  code String @unique // Business identifier (e.g. "SUP001")
+
+  // Contact info
+  email   String?
+  phone   String?
+  website String?
+
+  // Address (denormalised for simplicity)
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  state        String?
+  postalCode   String?
+  country      String?
+
+  // Business details
+  taxId        String? // VAT/Tax ID
+  paymentTerms String? // "Net 30", "COD", etc.
+  currency     String  @default("UGX")
+
+  // Status
+  isActive Boolean @default(true)
+
+  // Relations
+  products Product[]
+
+  // Audit fields
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([code])
+  @@index([isActive])
+  @@map("suppliers")
+}
+
+// ==========================================
+// PRODUCTS
+// ==========================================
+model Product {
+  id          String  @id @default(cuid())
+  name        String
+  sku         String  @unique
+  barcode     String? @unique
+  description String?
+
+  // Categorisation
+  categoryId String?
+  category   Category? @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  // Supplier
+  supplierId String?
+  supplier   Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+
+  // Pricing
+  costPrice Int // Purchase price
+  salePrice Int // Selling price
+
+  // Physical attributes
+  weight     Decimal? @db.Decimal(10, 2) // in kilograms
+  dimensions String? // JSON: {length, width, height, unit}
+
+  // Inventory settings
+  unit         String @default("unit") // "unit", "box", "carton", "kg" etc.
+  minStock     Int    @default(0) // Minimum stock level
+  maxStock     Int? // Maximum stock level
+  reorderPoint Int? // Point at which to reorder stock
+
+  // Status
+  status ProductStatus @default(ACTIVE)
+
+  // Relations
+  inventoryItems InventoryItem[]
+  movements      MovementRecord[]
+
+  // Audit fields
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([sku])
+  @@index([barcode])
+  @@index([categoryId])
+  @@index([supplierId])
+  @@index([status])
+  // @@fulltext([name, description])
+  @@map("products")
+}
+
+// ==========================================
+// LOCATIONS
+// ==========================================
+model Location {
+  id   String       @id @default(cuid())
+  name String
+  code String       @unique // Business identifier (e.g. "WH-KLA-01")
+  type LocationType @default(WAREHOUSE)
+
+  // Address
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  state        String?
+  postalCode   String?
+  country      String?
+
+  // Contact info
+  email       String?
+  phone       String?
+  managerName String?
+
+  // Status
+  isActive Boolean @default(true)
+
+  // Relations
+  inventoryItems InventoryItem[]
+  movementFrom   MovementRecord[] @relation("MovementFromLocation")
+  movementTo     MovementRecord[] @relation("MovementToLocation")
+
+  // Audit fields
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([code])
+  @@index([isActive])
+  @@index([type])
+  @@map("locations")
+}
+
+// ==========================================
+// INVENTORY (Current Stock Levels)
+// ==========================================
+model InventoryItem {
+  id String @id @default(cuid())
+
+  // Composite key: product * location
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  locationId String
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  // Current quantities
+  quantity          Int @default(0)
+  reservedQuantity  Int @default(0) // Allocated but not yet shipped
+  availableQuantity Int @default(0) // quantity - reservedQuantity (computed)
+
+  // Stock levels
+  minStock     Int? // Minimum stock level
+  maxStock     Int? // Maximum stock level
+  reorderPoint Int? // Point at which to reorder stock
+
+  // Last stock take
+  lastCountDate     DateTime?
+  lastCountQuantity Int?
+
+  // Audit fields
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@unique([productId, locationId])
+  @@index([productId])
+  @@index([locationId])
+  @@index([quantity])
+  @@map("inventory_items")
+}
+
+// ==========================================
+// MOVEMENT RECORDS (Audit Trail)
+// ==========================================
+model MovementRecord {
+  id String @id @default(cuid())
+
+  // What moved
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  // Where (depending on movement type)
+  locationId String? // For most movements
+  location   Location? @relation("MovementToLocation", fields: [locationId], references: [id], onDelete: Restrict)
+
+  fromLocationId String? // For TRANSFER_OUT
+  fromLocation   Location? @relation("MovementFromLocation", fields: [fromLocationId], references: [id], onDelete: Restrict)
+
+  // Movement details
+  type      MovementType
+  quantity  Int // Positive for IN, Negative for OUT
+  unitCost  Int? // Cost per unit (for PURCHASE)
+  totalCost Int?
+
+  // Reference documents
+  referenceNumber String? // PO#, Invoice#, Transfer#, etc.
+  notes           String?
+
+  // Future: User tracking
+  // userId String?
+  // user   User? @relation(fields: [userId], references: [id])
+
+  // Timestamp (when it happened, not when it was recorded)
+  movementDate DateTime @default(now())
+
+  // Audit fields
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([productId])
+  @@index([locationId])
+  @@index([fromLocationId])
+  @@index([type])
+  @@index([movementDate])
+  @@index([createdAt])
+  @@map("movement_records")
 }
