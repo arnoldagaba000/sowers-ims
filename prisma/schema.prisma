@@ -277,9 +277,8 @@ model InventoryItem {
   location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
 
   // Current quantities
-  quantity          Int @default(0)
-  reservedQuantity  Int @default(0) // Allocated but not yet shipped
-  availableQuantity Int @default(0) // quantity - reservedQuantity (computed)
+  quantity         Int @default(0)
+  reservedQuantity Int @default(0) // Allocated but not yet shipped
 
   // Stock levels
   minStock     Int? // Minimum stock level
@@ -313,15 +312,15 @@ model MovementRecord {
   product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
 
   // Where (depending on movement type)
-  locationId String? // For most movements
+  locationId String? // Destination location (required by DB check)
   location   Location? @relation("MovementToLocation", fields: [locationId], references: [id], onDelete: Restrict)
 
-  fromLocationId String? // For TRANSFER_OUT
+  fromLocationId String? // Required for TRANSFER_OUT
   fromLocation   Location? @relation("MovementFromLocation", fields: [fromLocationId], references: [id], onDelete: Restrict)
 
   // Movement details
   type      MovementType
-  quantity  Int // Positive for IN, Negative for OUT
+  quantity  Int // Positive for inbound, negative for outbound
   unitCost  Int? // Cost per unit (for PURCHASE)
   totalCost Int?
 
