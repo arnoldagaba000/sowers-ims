@@ -10,19 +10,40 @@ datasource db {
   provider = "postgresql"
 }
 
+// ============================================================================
+// USER MANAGEMENT (Prepared for Phase 4 - Auth)
+// ============================================================================
+
+// USER
+// Prepared for Better Auth integration
+// Schema ready but not actively used until auth is implemented
 model User {
-  id            String    @id
+  id            String  @id
   name          String
   email         String
-  emailVerified Boolean   @default(false)
+  emailVerified Boolean @default(false)
   image         String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  sessions      Session[]
-  accounts      Account[]
+
+  // Role-based access control (prepare for future)
+  role UserRole @default(USER)
+
+  // Audit fields
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  sessions Session[]
+  accounts Account[]
 
   @@unique([email])
   @@map("user")
+}
+
+enum UserRole {
+  ADMIN // Full system access
+  MANAGER // Location/regional management
+  USER // Standard user
+  VIEWER // Read-only access
 }
 
 model Session {
@@ -73,48 +94,25 @@ model Verification {
   @@map("verification")
 }
 
-// =======================================
-// ENUMS
-// =======================================
-enum MovementType {
-  PURCHASE // Stock received from supplier
-  SALE // Stock sold to customer
-  TRANSFER_OUT // Stock sent to another location
-  TRANSFER_IN // Stock received from another location
-  ADJUSTMENT // Manual correction (audit required)
-  RETURN // Stock returned to supplier or from customer
-  DAMAGED // Stock marked as damaged/unusable
-  LOST // Stock reported lost/stolen
-}
+// ============================================================================
+// CORE DOMAIN ENTITIES
+// ============================================================================
 
-enum ProductStatus {
-  ACTIVE
-  DISCONTINUED
-  OUT_OF_STOCK
-}
-
-enum LocationType {
-  WAREHOUSE
-  STORE
-  DISTRIBUTION_CENTER
-  SUPPLIER
-}
-
-// =========================================
-// CATEGORIES
-// =========================================
+// CATEGORY
+// Hierarchical product categorization supporting nested categories
+// Soft delete enabled - categories with products cannot be hard deleted
 model Category {
-  id          String  @id @default(uuid())
-  name        String  @unique
+  id          String  @id @default(cuid())
+  name        String
   description String?
   slug        String  @unique
 
-  // Self-referencing hierarchy
+  // Hierarchical support for nested categories (e.g., Electronics > Computers > Laptops)
   parentId String?
-  parent   Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  parent   Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
   children Category[] @relation("CategoryHierarchy")
 
-  // Relations
+  // Relationships
   products Product[]
 
   // Audit fields
@@ -122,114 +120,25 @@ model Category {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  @@index([parentId])
+  // Indexes for performance
   @@index([slug])
+  @@index([parentId])
+  @@index([deletedAt]) // Efficiently filter soft-deleted records
   @@map("categories")
 }
 
-// ==========================================
-// SUPPLIERS
-// ==========================================
+// SUPPLIER
+// External entities that supply products
+// Many-to-many with Product (a product can have multiple suppliers)
 model Supplier {
   id   String @id @default(cuid())
   name String
-  code String @unique // Business identifier (e.g. "SUP001")
+  code String @unique // Business-friendly identifier (e.g., "SUP-001")
 
-  // Contact info
-  email   String?
-  phone   String?
-  website String?
-
-  // Address (denormalised for simplicity)
-  addressLine1 String?
-  addressLine2 String?
-  city         String?
-  state        String?
-  postalCode   String?
-  country      String?
-
-  // Business details
-  taxId        String? // VAT/Tax ID
-  paymentTerms String? // "Net 30", "COD", etc.
-  currency     String  @default("UGX")
-
-  // Status
-  isActive Boolean @default(true)
-
-  // Relations
-  products Product[]
-
-  // Audit fields
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
-
-  @@index([code])
-  @@index([isActive])
-  @@map("suppliers")
-}
-
-// ==========================================
-// PRODUCTS
-// ==========================================
-model Product {
-  id          String  @id @default(cuid())
-  name        String
-  sku         String  @unique
-  barcode     String? @unique
-  description String?
-
-  // Categorisation
-  categoryId String?
-  category   Category? @relation(fields: [categoryId], references: [id], onDelete: Restrict)
-
-  // Supplier
-  supplierId String?
-  supplier   Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
-
-  // Pricing
-  costPrice Int // Purchase price
-  salePrice Int // Selling price
-
-  // Physical attributes
-  weight     Decimal? @db.Decimal(10, 2) // in kilograms
-  dimensions String? // JSON: {length, width, height, unit}
-
-  // Inventory settings
-  unit         String @default("unit") // "unit", "box", "carton", "kg" etc.
-  minStock     Int    @default(0) // Minimum stock level
-  maxStock     Int? // Maximum stock level
-  reorderPoint Int? // Point at which to reorder stock
-
-  // Status
-  status ProductStatus @default(ACTIVE)
-
-  // Relations
-  inventoryItems InventoryItem[]
-  movements      MovementRecord[]
-
-  // Audit fields
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
-
-  @@index([sku])
-  @@index([barcode])
-  @@index([categoryId])
-  @@index([supplierId])
-  @@index([status])
-  // @@fulltext([name, description])
-  @@map("products")
-}
-
-// ==========================================
-// LOCATIONS
-// ==========================================
-model Location {
-  id   String       @id @default(cuid())
-  name String
-  code String       @unique // Business identifier (e.g. "WH-KLA-01")
-  type LocationType @default(WAREHOUSE)
+  // Contact information
+  contactName String?
+  email       String?
+  phone       String?
 
   // Address
   addressLine1 String?
@@ -239,18 +148,17 @@ model Location {
   postalCode   String?
   country      String?
 
-  // Contact info
-  email       String?
-  phone       String?
-  managerName String?
+  // Business details
+  taxId        String?
+  paymentTerms String? // e.g., "Net 30", "Net 60"
+  notes        String?
 
   // Status
   isActive Boolean @default(true)
 
-  // Relations
-  inventoryItems InventoryItem[]
-  movementFrom   MovementRecord[] @relation("MovementFromLocation")
-  movementTo     MovementRecord[] @relation("MovementToLocation")
+  // Relationships
+  productSuppliers ProductSupplier[]
+  purchaseOrders   PurchaseOrder[]
 
   // Audit fields
   createdAt DateTime  @default(now())
@@ -259,93 +167,346 @@ model Location {
 
   @@index([code])
   @@index([isActive])
-  @@index([type])
+  @@index([deletedAt])
+  @@map("suppliers")
+}
+
+// LOCATION
+// Physical locations/warehouses where inventory is stored
+// Multi-location support is foundational to the system
+model Location {
+  id   String @id @default(cuid())
+  name String
+  code String @unique // Business-friendly identifier (e.g., "WH-NYC", "STORE-LA")
+
+  // Location type for business logic (warehouse, store, distribution center, etc.)
+  locationType LocationType @default(WAREHOUSE)
+
+  // Address
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  state        String?
+  postalCode   String?
+  country      String?
+
+  // Operational details
+  isActive  Boolean @default(true)
+  managerId String? // Future: link to User when auth is added
+
+  // Relationships
+  inventory      Inventory[]
+  movementsFrom  InventoryMovement[] @relation("MovementFromLocation")
+  movementsTo    InventoryMovement[] @relation("MovementToLocation")
+  purchaseOrders PurchaseOrder[]
+
+  // Audit fields
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([code])
+  @@index([isActive])
+  @@index([locationType])
+  @@index([deletedAt])
   @@map("locations")
 }
 
-// ==========================================
-// INVENTORY (Current Stock Levels)
-// ==========================================
-model InventoryItem {
+enum LocationType {
+  WAREHOUSE
+  STORE
+  DISTRIBUTION_CENTER
+  SHOWROOM
+  VIRTUAL // For digital/virtual inventory
+}
+
+// PRODUCT
+// Core entity representing items in inventory
+// Designed for flexibility: can represent physical goods, services, or assemblies
+model Product {
   id String @id @default(cuid())
 
-  // Composite key: product * location
+  // Basic information
+  name        String
+  sku         String  @unique // Stock Keeping Unit - unique business identifier
+  barcode     String? @unique // UPC/EAN barcode
+  description String?
+
+  // Categorization
+  categoryId String?
+  category   Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  // Pricing
+  costPrice    Int? // Cost from supplier
+  sellingPrice Int? // Default selling price
+
+  // Physical attributes
+  weight     Decimal? @db.Decimal(10, 2) // in kilograms
+  weightUnit String?  @default("kg")
+  dimensions String? // JSON string: {length, width, height, unit}
+
+  // Inventory management
+  trackInventory  Boolean @default(true)
+  minStockLevel   Int? // Reorder point
+  maxStockLevel   Int? // Maximum stock level
+  reorderQuantity Int? // Default reorder quantity
+
+  // Product type and flags
+  isActive     Boolean @default(true)
+  isPerishable Boolean @default(false)
+
+  // Relationships
+  inventory          Inventory[]
+  movements          InventoryMovement[]
+  productSuppliers   ProductSupplier[]
+  purchaseOrderItems PurchaseOrderItem[]
+
+  // Audit fields
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  // Performance indexes
+  @@index([sku])
+  @@index([barcode])
+  @@index([categoryId])
+  @@index([isActive])
+  @@index([deletedAt])
+  // @@fulltext([name, description]) // Full-text search on product name/description
+  @@map("products")
+}
+
+// PRODUCT-SUPPLIER JUNCTION
+// Many-to-many relationship: A product can have multiple suppliers,
+// and a supplier can supply multiple products
+// Stores supplier-specific data like their product code and lead time
+model ProductSupplier {
+  id String @id @default(cuid())
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  supplierId String
+  supplier   Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+
+  // Supplier-specific details
+  supplierSku      String? // Supplier's product code
+  supplierPrice    Int? // Price from this supplier
+  leadTimeDays     Int? // Days to receive from this supplier
+  minOrderQuantity Int? // Minimum order quantity
+
+  // Preference
+  isPreferred Boolean @default(false) // Primary supplier for this product
+  isActive    Boolean @default(true)
+
+  // Audit fields
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([productId, supplierId])
+  @@index([productId])
+  @@index([supplierId])
+  @@index([isPreferred])
+  @@map("product_suppliers")
+}
+
+// ============================================================================
+// INVENTORY TRACKING
+// ============================================================================
+
+// INVENTORY
+// Current stock levels per product per location
+// This is the "current state" table - updated by movements
+// CRITICAL: This should NEVER be updated directly - only through InventoryMovement transactions
+model Inventory {
+  id String @id @default(cuid())
+
   productId String
   product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
   locationId String
   location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
 
-  // Current quantities
-  quantity          Int @default(0)
-  reservedQuantity  Int @default(0) // Allocated but not yet shipped
-  availableQuantity Int @default(0) // quantity - reservedQuantity (computed)
-
   // Stock levels
-  minStock     Int? // Minimum stock level
-  maxStock     Int? // Maximum stock level
-  reorderPoint Int? // Point at which to reorder stock
+  quantityOnHand    Int @default(0) // Physical stock in location
+  quantityReserved  Int @default(0) // Reserved for orders (future use)
+  quantityAvailable Int @default(0) // Available = OnHand - Reserved
 
-  // Last stock take
-  lastCountDate     DateTime?
-  lastCountQuantity Int?
+  // Reorder tracking
+  lastRestocked DateTime?
+  lastSold      DateTime?
 
   // Audit fields
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
+  // Business rule: One inventory record per product per location
   @@unique([productId, locationId])
-  @@index([productId])
-  @@index([locationId])
-  @@index([quantity])
-  @@map("inventory_items")
+  // Critical performance indexes
+  @@index([productId]) // Find all locations for a product
+  @@index([locationId]) // Find all products at a location
+  @@index([quantityOnHand]) // Low stock queries
+  @@index([productId, locationId]) // Composite for frequent lookups
+  @@map("inventory")
 }
 
-// ==========================================
-// MOVEMENT RECORDS (Audit Trail)
-// ==========================================
-model MovementRecord {
+// INVENTORY MOVEMENT
+// Immutable audit log of ALL inventory changes
+// Every quantity change MUST create a movement record
+// This enables full traceability and historical analysis
+model InventoryMovement {
   id String @id @default(cuid())
 
-  // What moved
   productId String
   product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
 
-  // Where (depending on movement type)
-  locationId String? // Destination location (required by DB check)
-  location   Location? @relation("MovementToLocation", fields: [locationId], references: [id], onDelete: Restrict)
+  // Movement type determines business logic
+  movementType MovementType
 
-  fromLocationId String? // Required for TRANSFER_OUT
+  // Location(s) involved
+  // For most movements, use fromLocationId
+  // For transfers, use both fromLocationId and toLocationId
+  fromLocationId String?
   fromLocation   Location? @relation("MovementFromLocation", fields: [fromLocationId], references: [id], onDelete: Restrict)
 
-  // Movement details
-  type      MovementType
-  quantity  Int // Positive for inbound, negative for outbound
-  unitCost  Int? // Cost per unit (for PURCHASE)
-  totalCost Int?
+  toLocationId String?
+  toLocation   Location? @relation("MovementToLocation", fields: [toLocationId], references: [id], onDelete: Restrict)
 
-  // Reference documents
-  referenceNumber String? // PO#, Invoice#, Transfer#, etc.
-  notes           String?
+  // Quantity (always positive, direction determined by movementType)
+  quantity Int
 
-  // Future: User tracking
-  // userId String?
-  // user   User? @relation(fields: [userId], references: [id])
+  // Reference to source transaction (if applicable)
+  purchaseOrderId String?
+  purchaseOrder   PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id], onDelete: SetNull)
 
-  // Timestamp (when it happened, not when it was recorded)
-  movementDate DateTime @default(now())
+  // Cost tracking (in cents)
+  unitCost  Int? // Cost per unit at time of movement
+  totalCost Int? // Total cost of movement (quantity * unitCost)
+
+  // Documentation
+  reference String? // External reference (PO number, invoice, etc.)
+  notes     String?
+  reason    String? // For adjustments: reason for the correction
+
+  // Audit trail - WHO made the change (prepare for future auth)
+  createdBy   String? // Future: User ID
+  performedAt DateTime @default(now()) // When the movement occurred
+
+  // Timestamps
+  createdAt DateTime @default(now())
+
+  // Critical indexes for performance and reporting
+  @@index([productId]) // All movements for a product
+  @@index([movementType]) // Query by movement type
+  @@index([fromLocationId])
+  @@index([toLocationId])
+  @@index([performedAt]) // Time-series queries
+  @@index([purchaseOrderId])
+  @@index([productId, performedAt]) // Product history over time
+  @@index([productId, movementType]) // Product movements by type
+  @@map("inventory_movements")
+}
+
+enum MovementType {
+  PURCHASE // Receiving from supplier (increases stock)
+  SALE // Sold to customer (decreases stock)
+  ADJUSTMENT // Manual correction (can increase or decrease)
+  TRANSFER_OUT // Moved to another location (decreases stock at source)
+  TRANSFER_IN // Received from another location (increases stock at destination)
+  RETURN_IN // Customer return (increases stock)
+  RETURN_OUT // Return to supplier (decreases stock)
+  DAMAGE // Damaged/lost inventory (decreases stock)
+  PRODUCTION_IN // Created via manufacturing/assembly (increases stock)
+  PRODUCTION_OUT // Consumed in manufacturing (decreases stock)
+}
+
+// ============================================================================
+// PURCHASE ORDERS (Receiving Inventory)
+// ============================================================================
+
+// PURCHASE ORDER
+// Represents an order placed with a supplier
+// Links to inventory movements when received
+model PurchaseOrder {
+  id String @id @default(cuid())
+
+  orderNumber String @unique // Business-friendly PO number
+
+  supplierId String
+  supplier   Supplier @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+
+  locationId String // Which location will receive the goods
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Restrict)
+
+  // Status tracking
+  status POStatus @default(DRAFT)
+
+  // Dates
+  orderDate    DateTime  @default(now())
+  expectedDate DateTime?
+  receivedDate DateTime?
+
+  // Financials
+  subtotal Int @default(0)
+  tax      Int @default(0)
+  shipping Int @default(0)
+  total    Int @default(0)
+
+  // Documentation
+  notes String?
+  terms String?
+
+  // Relationships
+  items     PurchaseOrderItem[]
+  movements InventoryMovement[] // Links to movements when received
 
   // Audit fields
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
+  createdBy String? // Future: User ID
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  @@index([productId])
+  @@index([orderNumber])
+  @@index([supplierId])
   @@index([locationId])
-  @@index([fromLocationId])
-  @@index([type])
-  @@index([movementDate])
-  @@index([createdAt])
-  @@map("movement_records")
+  @@index([status])
+  @@index([orderDate])
+  @@index([expectedDate])
+  @@map("purchase_orders")
+}
+
+enum POStatus {
+  DRAFT // Being created
+  SUBMITTED // Sent to supplier
+  CONFIRMED // Supplier confirmed
+  PARTIAL // Partially received
+  RECEIVED // Fully received
+  CANCELLED // Cancelled
+}
+
+// PURCHASE ORDER ITEM
+// Line items in a purchase order
+model PurchaseOrderItem {
+  id String @id @default(cuid())
+
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  // Quantities
+  quantityOrdered  Int
+  quantityReceived Int @default(0)
+
+  // Pricing
+  unitCost  Int
+  totalCost Int // quantityOrdered * unitCost
+
+  // Audit fields
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([purchaseOrderId])
+  @@index([productId])
+  @@map("purchase_order_items")
 }
